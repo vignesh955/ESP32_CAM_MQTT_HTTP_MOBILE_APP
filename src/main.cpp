@@ -39,6 +39,7 @@ PubSubClient mqttClient(wifiSecure);
 #define PCLK_GPIO_NUM 22
 
 #define LED_FLASH 4
+#define BUZZER 14
 
 // ---------------------------
 // USER CONFIG - fill these
@@ -52,6 +53,8 @@ const char *MQTT_PASSWD = "Dh12345678"; // optional
 
 const char *MQTT_TOPIC_CMD = "esp32/cam/commands/capture";
 const char *MQTT_TOPIC_READY = "esp32/cam/status/ready";
+const char *MQTT_BEEP_TRIGGER = "esp32/cam/commands/beep";
+
 const char hiveMQ_ca[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIFGTCCBAGgAwIBAgISBY3q/k62gY9zzCKBwXeVZmRDMA0GCSqGSIb3DQEBCwUA
@@ -127,6 +130,12 @@ camera_fb_t *last_fb = nullptr; // pointer to last captured frame (must be retur
 unsigned long lastMqttReconnectAttempt = 0;
 unsigned long lastWiFiReconnectAttempt = 0;
 
+void alertBeep()
+{
+  digitalWrite(BUZZER, HIGH);
+  delay(2000);
+  digitalWrite(BUZZER, LOW);
+}
 // ---------------------------
 // Camera init
 void initCamera()
@@ -171,6 +180,46 @@ void initCamera()
   }
 }
 
+void handleCapture()
+{
+  camera_fb_t *fb = nullptr;
+
+  // If we already have a pre-captured frame
+  // if (last_fb)
+  // {
+  //   fb = last_fb;
+  //   last_fb = nullptr; // consume it
+  // }
+  // else
+  // {
+
+  // camera_fb_t *fb = esp_camera_fb_get();
+
+  digitalWrite(LED_FLASH, HIGH);
+  delay(200);
+  fb = esp_camera_fb_get();
+  digitalWrite(LED_FLASH, LOW);
+  if (!fb)
+  {
+    server.send(500, "text/plain", "Camera capture failed");
+    Serial.println("ERROR: capture failed on-demand");
+    return;
+  }
+  // }
+
+  // Correct HTTP headers
+  server.setContentLength(fb->len);
+  server.send(200, "image/jpeg");
+
+  // Write JPEG bytes
+  server.client().write(fb->buf, fb->len);
+
+  // Now safe to release frame buffer
+  esp_camera_fb_return(fb);
+
+  Serial.println("Served capture successfully.");
+}
+
 // ---------------------------
 // Helper: publish ready JSON with URL
 void publishReadyUrl()
@@ -207,27 +256,33 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     Serial.println("Capture command received via MQTT. Capturing image...");
 
     // If an earlier frame exists, free it first
-    if (last_fb)
-    {
-      esp_camera_fb_return(last_fb);
-      last_fb = nullptr;
-    }
+    // if (last_fb)
+    // {
+    //   esp_camera_fb_return(last_fb);
+    //   last_fb = nullptr;
+    // }
 
-    digitalWrite(LED_FLASH, HIGH);
-    delay(80);
-    camera_fb_t *fb = esp_camera_fb_get();
-    digitalWrite(LED_FLASH, LOW);
-    if (!fb)
-    {
-      Serial.println("ERROR: Camera capture failed in MQTT handler");
-      return;
-    }
+    // digitalWrite(LED_FLASH, HIGH);
+    // delay(200);
+    // camera_fb_t *fb = esp_camera_fb_get();
+    // digitalWrite(LED_FLASH, LOW);
+    // if (!fb)
+    // {
+    //   Serial.println("ERROR: Camera capture failed in MQTT handler");
+    //   return;
+    // }
 
-    // Store for serving; DO NOT return fb now
-    last_fb = fb;
+    // // Store for serving; DO NOT return fb now
+    // last_fb = fb;
 
+    handleCapture();
     // Publish URL (so app can GET)
     publishReadyUrl();
+  }
+  else if (String(topic) == String(MQTT_BEEP_TRIGGER))
+  {
+    Serial.println("Trigger command received from Mobile app");
+    alertBeep();
   }
 }
 
@@ -304,40 +359,6 @@ boolean mqttConnect()
 //   Serial.println("Served on-demand capture.");
 // }
 
-void handleCapture()
-{
-  camera_fb_t *fb = nullptr;
-
-  // If we already have a pre-captured frame
-  if (last_fb)
-  {
-    fb = last_fb;
-    last_fb = nullptr; // consume it
-  }
-  else
-  {
-    fb = esp_camera_fb_get();
-    if (!fb)
-    {
-      server.send(500, "text/plain", "Camera capture failed");
-      Serial.println("ERROR: capture failed on-demand");
-      return;
-    }
-  }
-
-  // Correct HTTP headers
-  server.setContentLength(fb->len);
-  server.send(200, "image/jpeg");
-
-  // Write JPEG bytes
-  server.client().write(fb->buf, fb->len);
-
-  // Now safe to release frame buffer
-  esp_camera_fb_return(fb);
-
-  Serial.println("Served capture successfully.");
-}
-
 // ---------------------------
 // Setup server routes and start
 void startHttpServer()
@@ -356,6 +377,8 @@ void setup()
 
   pinMode(LED_FLASH, OUTPUT);
   digitalWrite(LED_FLASH, LOW);
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW);
   // Start Wi-Fi
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -419,6 +442,8 @@ void loop()
         // subscribe after connect
         mqttClient.subscribe(MQTT_TOPIC_CMD);
         Serial.printf("Subscribed to %s\n", MQTT_TOPIC_CMD);
+        mqttClient.subscribe(MQTT_BEEP_TRIGGER);
+        Serial.printf("Subscribed to %s\n", MQTT_BEEP_TRIGGER);
       }
     }
   }
