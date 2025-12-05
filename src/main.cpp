@@ -123,8 +123,6 @@ iVDFanoCrMVIpQ59XWHkzdFmoHXHBV7oibVjGSO7ULSQ7MJ1Nz51phuDJSgAIU7A
 // ---------------------------
 // Globals
 WebServer server(80);
-// WiFiClient wifiClient;
-// PubSubClient mqttClient(wifiClient);
 
 camera_fb_t *last_fb = nullptr; // pointer to last captured frame (must be returned)
 unsigned long lastMqttReconnectAttempt = 0;
@@ -182,43 +180,38 @@ void initCamera()
 
 void handleCapture()
 {
-  camera_fb_t *fb = nullptr;
+  sensor_t *s = esp_camera_sensor_get();
 
-  // If we already have a pre-captured frame
-  // if (last_fb)
-  // {
-  //   fb = last_fb;
-  //   last_fb = nullptr; // consume it
-  // }
-  // else
-  // {
-
-  // camera_fb_t *fb = esp_camera_fb_get();
+  // Tune exposure for flash use
+  // s->set_ae_ctrl(s, 0);
+  // s->set_aec_value(s, 900);
+  // s->set_agc_gain(s, 20);
+  // s->set_awb_gain(s, 0);
 
   digitalWrite(LED_FLASH, HIGH);
-  delay(200);
-  fb = esp_camera_fb_get();
+  delay(350);
+
+  // Dummy frame to stabilize exposure
+  camera_fb_t *temp = esp_camera_fb_get();
+  esp_camera_fb_return(temp);
+
+  delay(150);
+
+  camera_fb_t *fb = esp_camera_fb_get();
   digitalWrite(LED_FLASH, LOW);
-  if (!fb)
-  {
-    server.send(500, "text/plain", "Camera capture failed");
-    Serial.println("ERROR: capture failed on-demand");
+
+  if (!fb) {
+    server.send(500, "text/plain", "Capture failed");
     return;
   }
-  // }
 
-  // Correct HTTP headers
   server.setContentLength(fb->len);
   server.send(200, "image/jpeg");
-
-  // Write JPEG bytes
   server.client().write(fb->buf, fb->len);
 
-  // Now safe to release frame buffer
   esp_camera_fb_return(fb);
-
-  Serial.println("Served capture successfully.");
 }
+
 
 // ---------------------------
 // Helper: publish ready JSON with URL
@@ -254,27 +247,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
   {
     // Accept simple payloads like "capture" or empty; we'll capture regardless
     Serial.println("Capture command received via MQTT. Capturing image...");
-
-    // If an earlier frame exists, free it first
-    // if (last_fb)
-    // {
-    //   esp_camera_fb_return(last_fb);
-    //   last_fb = nullptr;
-    // }
-
-    // digitalWrite(LED_FLASH, HIGH);
-    // delay(200);
-    // camera_fb_t *fb = esp_camera_fb_get();
-    // digitalWrite(LED_FLASH, LOW);
-    // if (!fb)
-    // {
-    //   Serial.println("ERROR: Camera capture failed in MQTT handler");
-    //   return;
-    // }
-
-    // // Store for serving; DO NOT return fb now
-    // last_fb = fb;
-
     handleCapture();
     // Publish URL (so app can GET)
     publishReadyUrl();
@@ -314,50 +286,7 @@ boolean mqttConnect()
   return false;
 }
 
-// ---------------------------
-// HTTP /capture handler
-// void handleCapture()
-// {
-//   // If we have a previously-captured frame from MQTT trigger, serve that
-//   if (last_fb)
-//   {
-//     server.sendHeader("Content-Type", "image/jpeg");
-//     server.sendHeader("Content-Disposition", "inline; filename=capture.jpg");
-//     server.sendHeader("Content-Length", String(last_fb->len));
 
-//     //server.send(200);
-
-//     WiFiClient client = server.client();
-//     client.write(last_fb->buf, last_fb->len);
-
-//     // Return and free
-//     esp_camera_fb_return(last_fb);
-//     last_fb = nullptr;
-//     Serial.println("Served stored capture.");
-//     return;
-//   }
-
-//   // Else capture on-demand
-//   camera_fb_t *fb = esp_camera_fb_get();
-//   if (!fb)
-//   {
-//     server.send(500, "text/plain", "Camera capture failed");
-//     Serial.println("ERROR: capture failed on-demand");
-//     return;
-//   }
-
-//   server.sendHeader("Content-Type", "image/jpeg");
-//   server.sendHeader("Content-Disposition", "inline; filename=capture.jpg");
-//   server.sendHeader("Content-Length", String(fb->len));
-
-//   //server.send(200);
-
-//   WiFiClient client = server.client();
-//   client.write(fb->buf, fb->len);
-
-//   esp_camera_fb_return(fb);
-//   Serial.println("Served on-demand capture.");
-// }
 
 // ---------------------------
 // Setup server routes and start
